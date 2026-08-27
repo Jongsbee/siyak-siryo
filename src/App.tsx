@@ -7,6 +7,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ReagentItem, FilterState } from './types';
 import { RAW_SAMPLE_CSV_DATA } from './data/sampleReagents';
 import { parseCSV, processReagentItems, calculateSummary, getDuplicateGroups, exportToCSV } from './utils/reagentUtils';
+import { getSupabaseClient, getStoredSupabaseConfig } from './utils/supabaseClient';
 import { Header } from './components/Header';
 import { DashboardCards } from './components/DashboardCards';
 import { FilterBar } from './components/FilterBar';
@@ -15,11 +16,16 @@ import { ImportModal } from './components/ImportModal';
 import { DetailModal } from './components/DetailModal';
 import { AddEditModal } from './components/AddEditModal';
 import { OrderListModal } from './components/OrderListModal';
-import { Database, ShieldCheck, Sparkles } from 'lucide-react';
+import { AuthScreen } from './components/AuthScreen';
+import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 
 const LOCAL_STORAGE_KEY = 'reagent_inventory_data_v1';
 
 export default function App() {
+  const [user, setUser] = useState<any | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
+
   const [items, setItems] = useState<ReagentItem[]>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -50,6 +56,33 @@ export default function App() {
   const [isOrderListOpen, setIsOrderListOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<ReagentItem | null>(null);
   const [itemToEdit, setItemToEdit] = useState<ReagentItem | null>(null);
+
+  // Check Supabase Auth session on mount
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const client = getSupabaseClient();
+        if (client) {
+          const { data: { session } } = await client.auth.getSession();
+          if (session?.user) {
+            setUser(session.user);
+          }
+          const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+            setUser(session?.user || null);
+          });
+          setAuthChecking(false);
+          return () => {
+            subscription.unsubscribe();
+          };
+        }
+      } catch (err) {
+        console.error('Auth session check error:', err);
+      }
+      setAuthChecking(false);
+    };
+
+    checkSession();
+  }, []);
 
   // Save to localStorage whenever items change
   useEffect(() => {
@@ -139,7 +172,6 @@ export default function App() {
     // 6. Sorting
     result.sort((a, b) => {
       if (filter.sortBy === 'urgency') {
-        // warn_rank asc, d_day asc, remain_percentage asc, reagent_id asc
         if ((a.warn_rank ?? 5) !== (b.warn_rank ?? 5)) {
           return (a.warn_rank ?? 5) - (b.warn_rank ?? 5);
         }
@@ -216,6 +248,34 @@ export default function App() {
     setItems(processReagentItems(updated));
   };
 
+  const handleLogout = async () => {
+    const client = getSupabaseClient();
+    if (client) {
+      await client.auth.signOut();
+    }
+    setUser(null);
+  };
+
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+        <div className="text-center space-y-3">
+          <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-sm text-slate-400">인증 상태 확인 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If user is not logged in, show AuthScreen
+  if (!user) {
+    return (
+      <AuthScreen
+        onLoginSuccess={(loggedInUser) => setUser(loggedInUser)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans pb-16">
       
@@ -226,6 +286,9 @@ export default function App() {
         onOpenOrderList={() => setIsOrderListOpen(true)}
         onExportCSV={handleExportCSV}
         onResetSample={handleResetSample}
+        onLogout={handleLogout}
+        onOpenConfig={() => setIsConfigOpen(true)}
+        userEmail={user?.email}
         totalCount={items.length}
       />
 
@@ -288,6 +351,15 @@ export default function App() {
         isOpen={isOrderListOpen}
         items={items}
         onClose={() => setIsOrderListOpen(false)}
+      />
+
+      <SupabaseConfigModal
+        isOpen={isConfigOpen}
+        onClose={() => setIsConfigOpen(false)}
+        onConfigSaved={() => {
+          setIsConfigOpen(false);
+          window.location.reload();
+        }}
       />
 
     </div>
