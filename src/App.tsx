@@ -57,6 +57,9 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<ReagentItem | null>(null);
   const [itemToEdit, setItemToEdit] = useState<ReagentItem | null>(null);
 
+  // Notes state
+  const [notes, setNotes] = useState<Record<string, string>>({});
+
   // Check Supabase Auth session on mount
   useEffect(() => {
     const checkSession = async () => {
@@ -83,6 +86,60 @@ export default function App() {
 
     checkSession();
   }, []);
+
+  // Fetch notes when user is authenticated
+  useEffect(() => {
+    const fetchNotes = async () => {
+      if (!user) return;
+      const client = getSupabaseClient();
+      if (!client) return;
+
+      try {
+        const { data, error } = await client
+          .from('reagent_notes')
+          .select('reagent_id, note_content')
+          .eq('user_id', user.id);
+
+        if (data && !error) {
+          const map: Record<string, string> = {};
+          data.forEach((row: any) => {
+            map[row.reagent_id] = row.note_content;
+          });
+          setNotes(map);
+        }
+      } catch (e) {
+        console.error('Failed to load notes:', e);
+      }
+    };
+
+    fetchNotes();
+  }, [user]);
+
+  const handleSaveNote = async (reagent_id: string, noteContent: string) => {
+    setNotes(prev => ({ ...prev, [reagent_id]: noteContent }));
+
+    const client = getSupabaseClient();
+    if (!client || !user) return;
+
+    try {
+      const { error } = await client
+        .from('reagent_notes')
+        .upsert({
+          user_id: user.id,
+          reagent_id,
+          note_content: noteContent,
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: 'user_id,reagent_id'
+        });
+
+      if (error) {
+        console.error('Error saving note to Supabase:', error);
+      }
+    } catch (e) {
+      console.error('Failed to save note:', e);
+    }
+  };
 
   // Save to localStorage whenever items change
   useEffect(() => {
@@ -335,9 +392,11 @@ export default function App() {
         isOpen={!!selectedItem}
         item={selectedItem}
         duplicateGroups={duplicateGroups}
+        currentNote={selectedItem ? (notes[selectedItem.reagent_id] || '') : ''}
         onClose={() => setSelectedItem(null)}
         onEdit={item => { setItemToEdit(item); setIsAddOpen(true); }}
         onDelete={handleDeleteItem}
+        onSaveNote={handleSaveNote}
       />
 
       <AddEditModal
